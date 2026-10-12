@@ -11,6 +11,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
 from .backend import SaleaeBackend
 from .demo import create_demo
+from .display import configure_display
 from .models import CaptureSettings, DecodeSettings, Session
 from .session import analyze_session, export_csv, load_session, save_session
 
@@ -464,6 +465,7 @@ class Window(QtWidgets.QMainWindow):
 
 
 def main():
+    configure_display()
     pg.setConfigOptions(background="#17212b", foreground="#dce5ed", antialias=False)
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("Saleae Differential")

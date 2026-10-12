@@ -27,6 +27,17 @@ saleae-differential
 
 PySide6 is the default Qt dependency. The interface also works with PyQt6 via pyqtgraph's Qt compatibility layer, which was used for local validation. For an existing environment with PyQt6, running the module from this repository does not require installing PySide6.
 
+### WSLg display startup
+
+The application automatically resolves the WSLg Wayland socket when `WAYLAND_DISPLAY` is set but `XDG_RUNTIME_DIR` points to a directory without that socket. This changes only the application's environment. An explicitly configured `QT_QPA_PLATFORM` is respected.
+
+If you use X11 instead of Wayland and Qt reports a missing `libxcb-cursor.so.0`, install its Ubuntu system dependency and select X11:
+
+```bash
+sudo apt install libxcb-cursor0
+QT_QPA_PLATFORM=xcb python -m saleae_differential --demo
+```
+
 ## Acquisition backends
 
 ### Headless (preferred)
