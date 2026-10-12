@@ -1,0 +1,3 @@
+# Saleae's Linux x64 headless preview, published August 8, 2026.
+# Other platforms: use the matching wheel linked in README.
+logic2-automation @ https://downloads.saleae.com/logic_automation_server/90234858/logic2_automation-1.1.0-py3-none-manylinux_2_27_x86_64.whl
