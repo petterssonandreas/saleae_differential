@@ -31,6 +31,13 @@ def prepare_session(session):
     return session, analysis, plot_data
 
 
+class TimeZoomViewBox(pg.ViewBox):
+    """Wheel zoom affects time unless an axis explicitly requests vertical zoom."""
+
+    def wheelEvent(self, event, axis=None):
+        super().wheelEvent(event, axis=0 if axis is None else axis)
+
+
 class Bridge(QtCore.QObject):
     completed = QtCore.Signal(str, object, object)
     progress = QtCore.Signal(str)
@@ -151,9 +158,9 @@ class Window(QtWidgets.QMainWindow):
         root.addWidget(right)
         plots = pg.GraphicsLayoutWidget()
         right.addWidget(plots)
-        self.input_plot = plots.addPlot(row=0, col=0, title="Analog inputs")
-        self.diff_plot = plots.addPlot(row=1, col=0, title="Difference · positive − negative")
-        self.logic_plot = plots.addPlot(row=2, col=0, title="Reconstructed UART logic")
+        self.input_plot = plots.addPlot(row=0, col=0, title="Analog inputs", viewBox=TimeZoomViewBox())
+        self.diff_plot = plots.addPlot(row=1, col=0, title="Difference · positive − negative", viewBox=TimeZoomViewBox())
+        self.logic_plot = plots.addPlot(row=2, col=0, title="Reconstructed UART logic", viewBox=TimeZoomViewBox())
         for plot in (self.input_plot, self.diff_plot, self.logic_plot):
             plot.showGrid(x=True, y=True, alpha=0.2)
             plot.setLabel("bottom", "Time", units="s")

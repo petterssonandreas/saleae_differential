@@ -4,6 +4,8 @@ A desktop application for capturing two analog channels from a **Saleae Logic Pr
 
 The viewer shows the two inputs, their difference, optional common-mode voltage, reconstructed logic, and a timestamped UART table. Select a frame to zoom to its waveform interval. Change receiver or UART settings and click **Decode again** to reuse the original recording.
 
+Scroll over a waveform to zoom time horizontally across the linked plots. Scroll over a plot's left axis (voltage labels) to zoom only that plot vertically.
+
 ## Install and run
 
 Use Python 3.12 or newer on Linux:
