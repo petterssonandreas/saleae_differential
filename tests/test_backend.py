@@ -19,7 +19,9 @@ class Manager:
 
     @classmethod
     def connect(cls, **kwargs):
-        return cls.launch()
+        manager = cls.launch()
+        manager.address = kwargs.get('address')
+        return manager
 
     def __init__(self):
         self.closed = False
@@ -31,6 +33,7 @@ class Manager:
         self.closed = True
 
     def get_devices(self, **kwargs):
+        self.device_query = kwargs
         return self.devices_list
 
     def get_app_info(self):
@@ -135,3 +138,56 @@ def test_cleanup_error_does_not_hide_capture_error(backend, tmp_path):
     backend.manager.close_capture = close_failed
     with pytest.raises(RuntimeError, match='USB disconnected'):
         backend.capture(CaptureSettings(), DecodeSettings(), tmp_path)
+
+
+def test_simulation_discovery_capture_and_metadata(backend, tmp_path):
+    backend.connect('desktop')
+    backend.manager.devices_list.extend([
+        SimpleNamespace(device_id='DEMO8', device_type=8, is_simulation=True),
+        SimpleNamespace(device_id='DEMO16', device_type=16, is_simulation=True),
+    ])
+    assert backend.devices() == ['PRO8']
+    assert backend.devices(simulation=True) == ['DEMO8']
+    assert backend.manager.device_query == {'include_simulation_devices': True}
+    session = backend.capture(CaptureSettings(simulation=True), DecodeSettings(), tmp_path)
+    assert backend.manager.configuration['device_id'] == 'DEMO8'
+    assert session.capture.simulation
+    assert session.metadata['is_simulation']
+    assert session.metadata['source'] == 'Logic Pro 8 simulation'
+    from saleae_differential.session import load_session
+    assert load_session(tmp_path).capture.simulation
+
+
+def test_missing_simulation_does_not_capture_physical_hardware(backend, tmp_path):
+    backend.connect('desktop')
+    with pytest.raises(RuntimeError, match='No simulated Pro 8'):
+        backend.capture(CaptureSettings(simulation=True), DecodeSettings(), tmp_path)
+    assert not hasattr(backend.manager, 'configuration')
+
+
+def test_windows_host_and_export_path(backend, tmp_path, monkeypatch):
+    backend.connect('connect', address='172.20.0.1', windows_backend=True)
+    assert backend.manager.address == '172.20.0.1'
+    translated = r'\\wsl.localhost\Ubuntu\tmp\capture'
+    calls = []
+    def translate(command, **kwargs):
+        assert command == ['wslpath', '-w', str(tmp_path.resolve())]
+        return SimpleNamespace(stdout=translated + '\n')
+    monkeypatch.setattr('saleae_differential.backend.subprocess.run', translate)
+    def export(directory, **kwargs):
+        calls.append(directory)
+        create_demo(tmp_path)
+    backend.manager.export = export
+    session = backend.capture(CaptureSettings(), DecodeSettings(), tmp_path)
+    assert calls == [translated]
+    assert session.metadata['backend_address'] == '172.20.0.1'
+    assert session.metadata['windows_backend']
+    assert len(analyze_session(session).frames) == 14
+
+
+def test_changed_host_reconnects(backend):
+    backend.connect('connect', address='172.20.0.1')
+    first = backend.manager
+    backend.connect('connect', address='172.21.0.1')
+    assert first.closed
+    assert backend.manager.address == '172.21.0.1'

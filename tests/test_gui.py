@@ -84,3 +84,18 @@ def test_close_when_backend_shutdown_fails(window):
     w.close()
     wait_idle(w, app, closed=True)
     assert w.closed_backend
+
+
+def test_simulation_controls_and_device_labels(window):
+    w, app = window
+    w.device.addItem('Physical', 'PRO8')
+    w.device.setCurrentIndex(1)
+    w.simulation.setChecked(True)
+    assert w.device.currentData() == ''
+    assert w.configuration()[0].simulation
+    w.finished('devices', ['DEMO8'], None)
+    assert 'Logic simulation' in w.device.itemText(1)
+    w.device.setCurrentIndex(1)
+    w.simulation.setChecked(False)
+    assert w.device.currentData() == ''
+    assert not w.configuration()[0].simulation

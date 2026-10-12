@@ -70,7 +70,36 @@ Set **Logic path** to your installed executable or executable AppImage. If left 
 
 Select **Connect to running backend** to use an existing local Automation server (default port 10430). For a manually started Logic 2 GUI, enable its Automation server once in preferences. An externally started backend remains running when this application exits.
 
-No automatic fallback occurs: a startup failure stays visible so you can choose another backend deliberately. **Refresh devices** starts/connects the selected backend and lists only physical Pro 8 devices. Capture automatically selects a sole Pro 8; multiple devices require an explicit selection.
+#### Logic on Windows, viewer in WSL
+
+Set **Automation host** to the Windows host address and enable **Logic runs on Windows (from WSL)**. The checkbox translates Linux capture folders to Windows-readable paths using `wslpath`, including WSL UNC paths, so the exported files remain available to the viewer. This applies only to Connect mode and requires Windows to be able to access that shared folder; it does not transfer files from arbitrary remote machines.
+
+Under default WSL NAT networking, find the Windows host address in your WSL terminal:
+
+```bash
+ip route show default | awk '{print $3}'
+```
+
+With mirrored networking, `127.0.0.1` can reach Windows. See [Microsoft's WSL networking documentation](https://learn.microsoft.com/en-us/windows/wsl/networking).
+
+Logic's Automation server must listen on an address accessible to WSL. Close Logic and start it from Windows PowerShell, substituting your executable path:
+
+```powershell
+& 'C:\path\to\Logic.exe' --automation --automationHost 0.0.0.0 --automationPort 10430
+```
+
+Saleae documents these listener arguments in its [remote connection guidance](https://discuss.saleae.com/t/automation-api-logic-2-with-remote-connection/2208). If Windows Firewall blocks access, allow the Automation port from your WSL network. Restart the viewer, set the host and Windows export-path checkbox, then refresh devices. For hardware-free captures also enable **Use Logic simulated Pro 8**.
+
+No automatic fallback occurs: a startup failure stays visible so you can choose another backend deliberately. **Refresh devices** starts/connects the selected backend and lists physical Pro 8 devices by default. Capture automatically selects a sole Pro 8; multiple devices require an explicit selection.
+
+### Capture from Logic's simulation without hardware
+
+1. Select **Desktop launch** and enter your Logic executable/AppImage path, or select **Connect to running backend** with Logic's Automation server enabled.
+2. Check **Use Logic simulated Pro 8**.
+3. Click **Refresh devices**. Simulated Pro 8 devices are marked **Logic simulation**. In this mode only simulated devices are used.
+4. Select a device if needed, leave channels 0 and 1 enabled, and click **Capture**.
+
+Logic generates the demo analog recording, which passes through the same binary export, alignment, subtraction, plots, and UART decoder as a physical capture. The data may produce no UART frames or frames with errors; successful waveform display verifies acquisition and export. The simulation selection is saved with settings and sessions, and the status identifies simulated recordings. This is separate from **Load demo**, which creates a known UART signal within this application without using Logic at all.
 
 ## Capture and decoder controls
 
@@ -98,7 +127,9 @@ UART decoding supports 5–9 data bits, none/even/odd parity, and 1/1.5/2 stop b
 
 Capture files remain in temporary storage until you exit. Save any recording you want to retain. Saved settings persist through Qt's standard per-user settings store. Changing decoder settings does not modify an opened recording; save to a new folder to retain the revised settings.
 
-The parser supports [documented analog binary export versions 0 and 1](https://www.saleae.com/support/logic-software/saving-and-exporting-data/binary-and-csv-export-formats-2025-update), including downsampling metadata and separate continuous waveforms. Alignment uses the slower input grid within the overlap and interpolation only inside each continuous interval. Gaps restart the decoder. The viewer uses peak-preserving display downsampling; the decoder always uses the full aligned signal.
+The parser supports [documented analog binary export versions 0 and 1](https://www.saleae.com/support/logic-software/saving-and-exporting-data/binary-and-csv-export-formats-2025-update), including downsampling metadata and separate continuous waveforms. Alignment uses the slower input grid within the overlap and interpolation only inside each continuous interval. Gaps restart the decoder. The viewer builds peak-preserving display levels on the worker and selects a bounded buffer for the visible time range. Zooming into a short interval restores its full samples; the decoder always uses the full aligned signal. Voltage ranges stay fixed during horizontal zoom.
+
+A one-second synthetic capture at 6.25 MS/s with 11,520 UART frames prepared in approximately 0.88 seconds and rendered in 0.017 seconds during a local offscreen check. Zooming to one frame took approximately 0.002 seconds. These measure local processing and display setup, not Windows capture/export or WSLg screen painting.
 
 Captures run on demand. Export and processing happen after acquisition; this is not gapless live acquisition. Closing the application waits for any active operation before releasing its backend.
 

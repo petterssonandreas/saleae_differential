@@ -6,29 +6,20 @@ import json
 import sys
 import tempfile
 import traceback
-import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
 from .backend import SaleaeBackend
 from .demo import create_demo
 from .display import configure_display
 from .models import CaptureSettings, DecodeSettings, Session
+from .plotting import PlotData
 from .session import analyze_session, export_csv, load_session, save_session
 
 
 def prepare_session(session):
     """Prepare large plot buffers on the worker as well as the decoder output."""
     analysis = analyze_session(session)
-    plot_data = {}
-    for attribute in ("times", "positive", "negative", "difference", "common_mode", "logic"):
-        arrays = []
-        for chunk in analysis.chunks:
-            values = np.asarray(getattr(chunk, attribute), dtype=float)
-            if attribute == "logic":
-                values = np.where(values < 0, np.nan, values)
-            arrays.extend((values, np.array([np.nan])))
-        plot_data[attribute] = np.concatenate(arrays)
-    return session, analysis, plot_data
+    return session, analysis, PlotData(analysis.chunks)
 
 
 class TimeZoomViewBox(pg.ViewBox):
@@ -89,6 +80,8 @@ class Window(QtWidgets.QMainWindow):
         self.sequence = 0
         self.session = None
         self.analysis = None
+        self.plot_data = None
+        self.drawing = False
         self.busy = False
         self.closing = False
         self.closed_backend = False
@@ -110,8 +103,15 @@ class Window(QtWidgets.QMainWindow):
         self.path = QtWidgets.QLineEdit()
         self.path.setPlaceholderText("Logic executable / AppImage (desktop mode)")
         self.port = self.integer(1, 65535, 10430)
+        self.host = QtWidgets.QLineEdit("127.0.0.1")
+        self.host.setToolTip("Connect mode: address of the machine running Logic's Automation server.")
+        self.windows_backend = QtWidgets.QCheckBox("Logic runs on Windows (from WSL)")
+        self.windows_backend.setToolTip("Connect mode: translates export paths with wslpath so Windows Logic can write the captured files.")
         self.device = QtWidgets.QComboBox()
         self.device.addItem("Automatic (one Pro 8)", "")
+        self.simulation = QtWidgets.QCheckBox("Use Logic simulated Pro 8")
+        self.simulation.setToolTip("Capture Logic's demo analog data without hardware. Decoded UART bytes may be meaningless.")
+        self.simulation.toggled.connect(self.reset_devices)
         self.positive = self.integer(0, 7, 0)
         self.negative = self.integer(0, 7, 1)
         self.rate = self.combo([(f"{r / 1e6:g} MS/s", r) for r in (625_000, 1_250_000, 3_125_000, 6_250_000, 12_500_000, 25_000_000, 50_000_000)])
@@ -126,8 +126,10 @@ class Window(QtWidgets.QMainWindow):
         self.stops = self.combo([(str(n), n) for n in (1.0, 1.5, 2.0)])
         self.common = QtWidgets.QCheckBox("Show common-mode voltage")
         self.common.toggled.connect(self.update_common)
-        for label, widget in (("Backend", self.mode), ("Logic path", self.path), ("Automation port", self.port),
-                              ("Pro 8 device", self.device), ("Positive channel", self.positive),
+        for label, widget in (("Backend", self.mode), ("Logic path", self.path),
+                              ("Automation host", self.host), ("Automation port", self.port),
+                              ("Export paths", self.windows_backend),
+                              ("Simulation", self.simulation), ("Pro 8 device", self.device), ("Positive channel", self.positive),
                               ("Negative channel", self.negative), ("Analog rate", self.rate),
                               ("Duration (s)", self.duration), ("Lower threshold (V)", self.lower),
                               ("Upper threshold (V)", self.upper), ("Polarity", self.invert),
@@ -135,7 +137,7 @@ class Window(QtWidgets.QMainWindow):
                               ("Parity", self.parity), ("Stop bits", self.stops)):
             form.addRow(label, widget)
         form.addRow(self.common)
-        self.inputs = [self.mode, self.path, self.port, self.device, self.positive, self.negative,
+        self.inputs = [self.mode, self.path, self.host, self.port, self.windows_backend, self.device, self.simulation, self.positive, self.negative,
                        self.rate, self.duration, self.lower, self.upper, self.invert, self.baud,
                        self.bits, self.parity, self.stops]
         self.buttons = {}
@@ -179,6 +181,7 @@ class Window(QtWidgets.QMainWindow):
         self.common_curve.hide()
         self.d_curve = self.diff_plot.plot(pen=pg.mkPen("#81c784", width=1.5))
         self.l_curve = self.logic_plot.plot(pen=pg.mkPen("#80cbc4", width=1.5), stepMode="left")
+        self.diff_plot.sigXRangeChanged.connect(self.redraw_viewport)
         self.threshold_lines = [pg.InfiniteLine(pos=v, angle=0, pen=pg.mkPen("#ef9a9a", style=QtCore.Qt.PenStyle.DashLine)) for v in (-0.2, 0.2)]
         for line in self.threshold_lines:
             self.diff_plot.addItem(line)
@@ -224,7 +227,7 @@ class Window(QtWidgets.QMainWindow):
 
     def configuration(self):
         capture = CaptureSettings(self.positive.value(), self.negative.value(), int(self.rate.currentData()),
-                                  self.duration.value(), self.device.currentData() or "")
+                                  self.duration.value(), self.device.currentData() or "", simulation=self.simulation.isChecked())
         decode = DecodeSettings(self.lower.value(), self.upper.value(), self.invert.isChecked(),
                                 self.baud.value(), self.bits.value(), self.parity.currentData(), self.stops.currentData())
         capture.validate()
@@ -232,6 +235,7 @@ class Window(QtWidgets.QMainWindow):
         return capture, decode
 
     def apply_configuration(self, cfg, dec):
+        self.simulation.setChecked(cfg.simulation)
         self.positive.setValue(cfg.positive_channel)
         self.negative.setValue(cfg.negative_channel)
         rate_idx = self.rate.findData(cfg.sample_rate)
@@ -266,6 +270,8 @@ class Window(QtWidgets.QMainWindow):
             self.mode.setCurrentIndex(max(0, self.mode.findData(stored.get("mode", "headless"))))
             self.path.setText(stored.get("path", ""))
             self.port.setValue(stored.get("port", 10430))
+            self.host.setText(stored.get("host", "127.0.0.1"))
+            self.windows_backend.setChecked(stored.get("windows_backend", False))
             self.common.setChecked(stored.get("common_mode", False))
         except (TypeError, ValueError, KeyError):
             self.show_status("Saved settings were invalid; using defaults.")
@@ -274,7 +280,8 @@ class Window(QtWidgets.QMainWindow):
         cfg, dec = self.configuration()
         self.settings.setValue("configuration", json.dumps({"capture": asdict(cfg), "decode": asdict(dec),
                               "mode": self.mode.currentData(), "path": self.path.text(),
-                              "port": self.port.value(), "common_mode": self.common.isChecked()}))
+                              "port": self.port.value(), "host": self.host.text().strip(),
+                              "windows_backend": self.windows_backend.isChecked(), "common_mode": self.common.isChecked()}))
 
     def next_directory(self):
         self.sequence += 1
@@ -299,14 +306,20 @@ class Window(QtWidgets.QMainWindow):
         future.add_done_callback(completed)
 
     def connect_options(self):
-        return self.mode.currentData(), self.path.text().strip(), self.port.value()
+        return (self.mode.currentData(), self.path.text().strip(), self.port.value(),
+                self.host.text().strip() or "127.0.0.1", self.windows_backend.isChecked())
 
     def refresh(self):
         options = self.connect_options()
+        simulation = self.simulation.isChecked()
         def job():
             self.backend.connect(*options)
-            return self.backend.devices()
+            return self.backend.devices(simulation)
         self.run_job("devices", job)
+
+    def reset_devices(self):
+        self.device.clear()
+        self.device.addItem("Automatic (one simulated Pro 8)" if self.simulation.isChecked() else "Automatic (one Pro 8)", "")
 
     def capture(self):
         try:
@@ -387,12 +400,14 @@ class Window(QtWidgets.QMainWindow):
                 self.error(error)
         elif name == "devices":
             previous = self.device.currentData()
-            self.device.clear()
-            self.device.addItem("Automatic (one Pro 8)", "")
+            self.reset_devices()
             for device_id in result:
-                self.device.addItem(device_id, device_id)
+                self.device.addItem(f"{device_id} (Logic simulation)" if self.simulation.isChecked() else device_id, device_id)
             self.device.setCurrentIndex(max(0, self.device.findData(previous)))
-            self.show_status(f"Found {len(result)} Pro 8 device(s)." if result else "No Pro 8 found. Check USB and udev permissions.")
+            if self.simulation.isChecked():
+                self.show_status(f"Found {len(result)} simulated Pro 8 device(s). Demo data may not decode as UART.")
+            else:
+                self.show_status(f"Found {len(result)} Pro 8 device(s)." if result else "No Pro 8 found. Check USB and udev permissions.")
         elif name in ("capture", "demo", "open", "decode"):
             self.session, self.analysis, self.plot_data = result
             if name != "decode":
@@ -406,26 +421,48 @@ class Window(QtWidgets.QMainWindow):
 
     def render(self):
         chunks = self.analysis.chunks
-        times = self.plot_data["times"]
-        for curve, attr in ((self.a_curve, "positive"), (self.b_curve, "negative"),
-                            (self.common_curve, "common_mode"), (self.d_curve, "difference"), (self.l_curve, "logic")):
-            curve.setData(times, self.plot_data[attr], connect="finite")
+        # Fix voltage bounds for this recording. Horizontal scrolling must not
+        # indirectly rescale voltage through viewport-dependent auto-ranging.
+        low, high = self.plot_data.bounds(("positive", "negative", "common_mode"))
+        self.input_plot.setYRange(low, high, padding=0.05)
+        low, high = self.plot_data.bounds(("difference",))
+        self.diff_plot.setYRange(low, high, padding=0.05)
         self.update_common()
         self.threshold_lines[0].setValue(self.session.decode.lower_threshold)
         self.threshold_lines[1].setValue(self.session.decode.upper_threshold)
         self.selection.hide()
         self.diff_plot.setXRange(chunks[0].times[0], chunks[-1].times[-1], padding=0.02)
+        self.redraw_viewport()
         self.table_model.set_frames(self.analysis.frames)
         errors = sum(bool(f.errors) for f in self.analysis.frames)
         versions = self.session.metadata
         backend_info = f" · backend {versions.get('backend_version')} / API {versions.get('automation_library')}" if "backend_version" in versions else ""
         status = f"{len(self.analysis.frames)} UART frames · {errors} with errors{backend_info}"
+        if self.session.metadata.get("is_simulation"):
+            status = "Logic simulation · " + status + " · Demo waveforms may not contain valid UART data."
         if self.analysis.warnings:
             status += " · " + " ".join(self.analysis.warnings)
         self.show_status(status)
 
+    def redraw_viewport(self, *args):
+        if self.plot_data is None or self.drawing:
+            return
+        self.drawing = True
+        try:
+            low, high = self.diff_plot.viewRange()[0]
+            for curve, attr in ((self.a_curve, "positive"), (self.b_curve, "negative"),
+                                (self.d_curve, "difference"), (self.l_curve, "logic")):
+                x, y = self.plot_data.viewport(attr, low, high)
+                curve.setData(x, y, connect="finite")
+            if self.common.isChecked():
+                x, y = self.plot_data.viewport("common_mode", low, high)
+                self.common_curve.setData(x, y, connect="finite")
+        finally:
+            self.drawing = False
+
     def update_common(self):
         self.common_curve.setVisible(self.common.isChecked())
+        self.redraw_viewport()
 
     def select_frame(self, current, previous):
         if not current.isValid() or self.analysis is None:

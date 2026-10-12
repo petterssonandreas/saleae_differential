@@ -11,6 +11,7 @@ class CaptureSettings:
     sample_rate: int = 6_250_000
     duration: float = 0.1
     device_id: str = ""
+    simulation: bool = False
 
     def validate(self):
         if not all(isinstance(c, int) and 0 <= c < 8 for c in (self.positive_channel, self.negative_channel)):
